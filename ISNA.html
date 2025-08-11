@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Prayer Times – Hanafi (fixed Fajr & Asr + daily Jumu'ah)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="description" content="Daily prayer times using ISNA method with Hanafi (Shafaq configurable), fixed Fajr (04:30), fixed Asr (18:00), and a Jumu'ah card fixed at 13:30 shown every day. Dhuhr, Maghrib, and Isha come from the calculation method."/>
+  <style>
+    .glass { backdrop-filter: blur(10px); background: rgba(255,255,255,0.12); }
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100">
+  <div class="max-w-3xl mx-auto p-6">
+    <header class="mb-6 flex items-center justify-between gap-3">
+      <h1 class="text-2xl md:text-3xl font-semibold">Prayer Times</h1>
+      <button id="shareBtn" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 transition shadow">Copy Share Link</button>
+    </header>
+
+    <section class="glass rounded-3xl shadow-xl border border-white/10 p-4 md:p-6 mb-4">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <div id="todayStr" class="text-lg font-medium">—</div>
+          <div id="locStr" class="text-sm text-slate-300">Locating…</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+          <label class="opacity-80">Method</label>
+          <select id="methodSel" class="bg-white/10 border border-white/10 rounded-xl px-2 py-1">
+            <option value="2">Karachi</option>
+            <option value="5" selected>ISNA</option>
+            <option value="3">Egypt</option>
+            <option value="4">Umm al‑Qura</option>
+            <option value="12">Moonsighting</option>
+          </select>
+          <span class="text-slate-300">School: <b>Hanafi</b></span>
+          <span class="text-slate-300">Shafaq: <b id="shafaqLbl">general</b></span>
+        </div>
+      </div>
+
+      <div class="mt-3 text-xs text-slate-300">
+        Fajr is fixed at <b>04:30</b> and Asr is fixed at <b>18:00</b>. Dhuhr, Maghrib, and Isha are <b>calculated</b> using the selected method (default <b>ISNA</b>) with Hanafi Asr; Shafaq is configurable. A <b>Jumu'ah (Friday)</b> card fixed at <b>13:30</b> is shown <b>every day</b> by request.
+      </div>
+    </section>
+
+    <section id="cards" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></section>
+
+    <section class="mt-6 text-xs text-slate-400">
+      <div>Powered by <a class="underline" href="https://aladhan.com/prayer-times-api" target="_blank" rel="noopener">AlAdhan API</a>. No account needed.</div>
+      <div class="mt-1">Tip: Add <code>?lat=XX&lng=YY&method=5</code> to pin location & method. Defaults to your browser location.</div>
+    </section>
+  </div>
+
+  <script>
+    const qs = new URLSearchParams(location.search);
+    const clamp2 = n => String(n).padStart(2, '0');
+    const to12h = (h, m) => {
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      const hh = h % 12 === 0 ? 12 : h % 12;
+      return `${hh}:${clamp2(m)} ${ampm}`;
+    };
+
+    // Fixed times
+    const FIXED_FAJR   = qs.get('fixFajr')   || '04:30';
+    const FIXED_ASR    = qs.get('fixAsr')    || '18:00';
+    const FIXED_JUMUAH = qs.get('fixJummah') || '13:30';
+
+    const SHAFAQ = (qs.get('shafaq') || 'general').toLowerCase();
+    document.getElementById('shafaqLbl').textContent = SHAFAQ;
+
+    const methodSel = document.getElementById('methodSel');
+    const todayStr  = document.getElementById('todayStr');
+    const locStr    = document.getElementById('locStr');
+    const cardsWrap = document.getElementById('cards');
+    const shareBtn  = document.getElementById('shareBtn');
+
+    // Make ISNA (5) the default unless URL overrides; ignore old saved values
+    if (qs.has('method')) {
+      methodSel.value = qs.get('method');
+    } else {
+      methodSel.value = '5';
+    }
+
+    methodSel.addEventListener('change', () => {
+      // Keep it simple: do not persist across sessions to avoid stale values
+      load();
+    });
+
+    shareBtn.addEventListener('click', async () => {
+      const url = new URL(location.href);
+      if (state.lat && state.lng) {
+        url.searchParams.set('lat', state.lat);
+        url.searchParams.set('lng', state.lng);
+      }
+      url.searchParams.set('method', methodSel.value);
+      url.searchParams.set('fixFajr', FIXED_FAJR);
+      url.searchParams.set('fixAsr', FIXED_ASR);
+      url.searchParams.set('fixJummah', FIXED_JUMUAH);
+      url.searchParams.set('shafaq', SHAFAQ);
+      await navigator.clipboard.writeText(url.toString());
+      shareBtn.textContent = 'Link copied!';
+      setTimeout(()=> shareBtn.textContent = 'Copy Share Link', 1500);
+    });
+
+    const state = { lat: null, lng: null };
+
+    function setTodayLabel(greg, hijri) {
+      const d = new Date();
+      const opt = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+      todayStr.textContent = `${d.toLocaleDateString(undefined, opt)} | Hijri ${hijri?.day} ${hijri?.month?.en} ${hijri?.year}`;
+    }
+
+    function renderCards(times) {
+      const list = [
+        { key: 'Fajr',     label: 'Fajr'            , time: FIXED_FAJR },
+        { key: 'Dhuhr',    label: 'Dhuhr'           , time: times.Dhuhr },
+        { key: 'Jumu\'ah', label: 'Jumu\'ah (Fri)' , time: FIXED_JUMUAH },
+        { key: 'Asr',      label: 'Asr'             , time: FIXED_ASR },
+        { key: 'Maghrib',  label: 'Maghrib'         , time: times.Maghrib },
+        { key: 'Isha',     label: 'Isha'            , time: times.Isha }
+      ];
+
+      cardsWrap.innerHTML = '';
+
+      list.forEach(item => {
+        const el = document.createElement('div');
+        el.className = 'glass rounded-3xl border border-white/10 p-5 shadow-lg flex items-center justify-between';
+        let [HH, MM] = (item.time || '00:00').split(':').map(x=>parseInt(x,10));
+        let display = item.time;
+        if (!isNaN(HH) && !isNaN(MM)) display = to12h(HH, MM);
+        el.innerHTML = `
+          <div>
+            <div class="text-sm uppercase tracking-wide opacity-80">${item.label}</div>
+            <div class="text-3xl font-semibold">${display}</div>
+          </div>
+          <div class="text-xs text-slate-300" data-nextfor="${item.label}"></div>
+        `;
+        cardsWrap.appendChild(el);
+      });
+
+      tickCountdown(list);
+    }
+
+    function parseTimeToDate(t) {
+      if (!t) return null;
+      const [h,m] = t.split(':').map(x=>parseInt(x,10));
+      const d = new Date();
+      d.setHours(h, m, 0, 0);
+      return d;
+    }
+
+    function tickCountdown(list) {
+      function nextPrayer() {
+        const now = new Date();
+        const all = list.map(i=>({ key: i.label, at: parseTimeToDate(i.time) })).filter(x=>x.at);
+        let upcoming = all.find(x=>x.at > now);
+        if (!upcoming) {
+          const [fh,fm] = FIXED_FAJR.split(':').map(Number);
+          const tmr = new Date();
+          tmr.setDate(tmr.getDate()+1);
+          tmr.setHours(fh, fm, 0, 0);
+          upcoming = { key: 'Fajr', at: tmr };
+        }
+        return upcoming;
+      }
+      function fmtDur(ms){
+        const s = Math.max(0, Math.floor(ms/1000));
+        const h = Math.floor(s/3600);
+        const m = Math.floor((s%3600)/60);
+        const sec = s%60;
+        return `${clamp2(h)}:${clamp2(m)}:${clamp2(sec)}`;
+      }
+      function loop(){
+        const up = nextPrayer();
+        const now = new Date();
+        const remain = up.at - now;
+        document.querySelectorAll('[data-nextfor]').forEach(el => {
+          el.textContent = `Next: ${up.key} in ${fmtDur(remain)}`;
+        });
+      }
+      loop();
+      setInterval(loop, 1000);
+    }
+
+    async function reverseGeocode(lat, lng){
+      try {
+        const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+        const j = await resp.json();
+        return j?.display_name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+      } catch {
+        return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+      }
+    }
+
+    async function getTimings(lat, lng, method){
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const url = `https://api.aladhan.com/v1/timings?latitude=${lat}&longitude=${lng}&method=${method}&school=1&shafaq=${encodeURIComponent(SHAFAQ)}&timezonestring=${encodeURIComponent(tz)}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      if (j.code !== 200) throw new Error('API error');
+      return j.data;
+    }
+
+    async function load(){
+      const method = Number(qs.get('method') || methodSel.value || 5); // default ISNA
+      methodSel.value = String(method);
+
+      let lat = Number(qs.get('lat'));
+      let lng = Number(qs.get('lng'));
+
+      if (!lat || !lng) {
+        const saved = localStorage.getItem('pt_loc');
+        if (saved) { try { const o = JSON.parse(saved); lat = o.lat; lng = o.lng; } catch {} }
+      }
+
+      const ensure = async () => new Promise((resolve) => {
+        if (lat && lng) return resolve({lat, lng});
+        if (!navigator.geolocation) return resolve(null);
+        navigator.geolocation.getCurrentPosition(
+          pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+          ()  => resolve(null),
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+        );
+      });
+
+      const got = await ensure();
+      if (!got) {
+        locStr.textContent = 'Location unavailable. Add ?lat=XX&lng=YY to the URL.';
+        return;
+      }
+
+      state.lat = got.lat; state.lng = got.lng;
+      localStorage.setItem('pt_loc', JSON.stringify(state));
+
+      try {
+        const data = await getTimings(state.lat, state.lng, method);
+        setTodayLabel(data.date.gregorian, data.date.hijri);
+        const locName = await reverseGeocode(state.lat, state.lng);
+        locStr.textContent = locName;
+        renderCards(data.timings);
+      } catch (e) {
+        locStr.textContent = 'Could not load timings.';
+        console.error(e);
+      }
+    }
+
+    const state = { lat: null, lng: null };
+
+    load();
+  </script>
+</body>
+</html>
